@@ -1,0 +1,27 @@
+# 🔹 Core Deep Learning (GPU-compatible if CUDA torch installed separately)
+torch
+torchvision
+torchaudio
+
+# 🔹 Computer Vision
+ultralytics
+opencv-python
+
+# 🔹 Data handling
+numpy
+pandas
+scikit-learn
+
+# 🔹 Face Recognition
+deepface
+
+# 🔹 Person Re-Identification
+torchreid
+
+# 🔹 Backend API
+fastapi
+uvicorn
+
+# 🔹 Utilities & Visualization
+matplotlib
+pillow
