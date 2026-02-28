@@ -6,7 +6,10 @@ A multi-modal biometric identification and campus tracking system using computer
 - Real-time person detection using YOLOv8
 - Live camera feed processing
 - Bounding box visualization with confidence scores
-
+## 🔹 Features Implemented (Phase 3)
+- Person Re-Identification using body features
+- ResNet50 deep feature embeddings
+- Works even when face is not visible
 ## 🔹 Tech Stack
 - Python
 - OpenCV
