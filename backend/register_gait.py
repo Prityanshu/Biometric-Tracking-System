@@ -1,52 +1,87 @@
 # backend/register_gait.py
 
 import cv2
+import numpy as np
 from models.detector import PersonDetector
 from models.gait_model import GaitModel
 from utils.embeddings import save_embedding
 
+
 def register_gait(person_id):
     cap = cv2.VideoCapture(0)
-
     detector = PersonDetector()
     gait_model = GaitModel()
 
-    frame_sequence = []
+    print(f"\n[REGISTER] Registering gait for: {person_id}")
+    print("  - Walk naturally back and forth in front of the camera")
+    print("  - At least 3-4 full steps needed before saving")
+    print("  - Press 's' to save when ready | ESC to quit\n")
 
-    print("Walk naturally in front of camera. Press 's' to save gait.")
+    frame_sequence = []
+    MIN_FRAMES = 20
+    MAX_FRAMES = 30   # cap so we don't use too-old frames
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
+        display = frame.copy()
         detections = detector.detect(frame)
 
         for det in detections:
             x1, y1, x2, y2 = det["bbox"]
-
-            # safe crop
-            h, w, _ = frame.shape
+            h, w = frame.shape[:2]
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w, x2), min(h, y2)
 
             body_crop = frame[y1:y2, x1:x2]
+            if body_crop.size == 0:
+                continue
 
             frame_sequence.append(body_crop)
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            # Keep only the most recent MAX_FRAMES frames
+            if len(frame_sequence) > MAX_FRAMES:
+                frame_sequence.pop(0)
 
-        cv2.imshow("Register Gait", frame)
+            color = (0, 255, 0) if len(frame_sequence) >= MIN_FRAMES else (0, 165, 255)
+            status = f"Ready — press 's'! ({len(frame_sequence)} frames)" \
+                     if len(frame_sequence) >= MIN_FRAMES \
+                     else f"Keep walking... ({len(frame_sequence)}/{MIN_FRAMES})"
 
+            cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(display, status,
+                        (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+
+        cv2.imshow(f"Register Gait — {person_id}", display)
         key = cv2.waitKey(1)
 
-        if key == ord('s') and len(frame_sequence) > 15:
-            emb = gait_model.extract_gait_embedding(frame_sequence[-20:])
-            save_embedding(person_id, emb, "gait")
-            print(f"Saved gait embedding for {person_id}")
-            break
+        if key == ord('s'):
+            if len(frame_sequence) >= MIN_FRAMES:
+                try:
+                    # Use whichever method your GaitModel exposes
+                    if hasattr(gait_model, 'get_embedding'):
+                        emb = gait_model.get_embedding(frame_sequence[-MAX_FRAMES:])
+                    elif hasattr(gait_model, 'extract_gait_embedding'):
+                        emb = gait_model.extract_gait_embedding(frame_sequence[-MAX_FRAMES:])
+                    else:
+                        print("  ❌ GaitModel has no get_embedding or extract_gait_embedding method")
+                        break
 
-        if key == 27:
+                    if emb is not None:
+                        save_embedding(person_id, emb, "gait")
+                        print(f"\n[REGISTER] ✅ Saved gait embedding for {person_id}")
+                        break
+                    else:
+                        print("  ⚠️  Gait model returned None — try again")
+                except Exception as e:
+                    print(f"  ❌ Gait extraction failed: {e}")
+            else:
+                print(f"  ⚠️  Not enough frames yet ({len(frame_sequence)}/{MIN_FRAMES}) — keep walking")
+
+        elif key == 27:
+            print("[REGISTER] Cancelled")
             break
 
     cap.release()

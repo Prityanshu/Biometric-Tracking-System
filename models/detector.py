@@ -1,42 +1,50 @@
 # models/detector.py
 
 from ultralytics import YOLO
-import cv2
 from utils.config import MODEL_PATH, CONF_THRESHOLD
+
 
 class PersonDetector:
     def __init__(self):
+        # Use ByteTrack so each person gets a persistent track_id
+        # This means gait buffers stay per-person even when they cross paths
         self.model = YOLO(MODEL_PATH)
 
     def detect(self, frame):
         """
-        Input: frame (numpy image)
-        Output: list of detections (dict)
+        Input:  frame (numpy image)
+        Output: list of dicts with bbox, confidence, track_id
         """
-
-        results = self.model(frame)
+        # persist=True enables ByteTrack across frames
+        results = self.model.track(frame, persist=True, verbose=False)
 
         detections = []
 
         for r in results:
+            if r.boxes is None:
+                continue
+
             for box in r.boxes:
                 cls = int(box.cls[0])
 
-                # class 0 = person
-                if cls == 0:
-                    conf = float(box.conf[0])
+                # class 0 = person only
+                if cls != 0:
+                    continue
 
-                    if conf < CONF_THRESHOLD:
-                        continue
+                conf = float(box.conf[0])
+                if conf < CONF_THRESHOLD:
+                    continue
 
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-                    detection = {
-                        "bbox": (x1, y1, x2, y2),
-                        "confidence": conf,
-                        "class": "person"
-                    }
+                # track_id from ByteTrack — falls back to None if tracking unavailable
+                track_id = int(box.id[0]) if box.id is not None else None
 
-                    detections.append(detection)
+                detections.append({
+                    "bbox":       (x1, y1, x2, y2),
+                    "confidence": conf,
+                    "class":      "person",
+                    "track_id":   track_id
+                })
 
         return detections

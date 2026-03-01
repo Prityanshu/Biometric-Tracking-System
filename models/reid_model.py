@@ -3,14 +3,13 @@
 import torch
 import torchvision.transforms as transforms
 from torchvision import models
-from PIL import Image
 import numpy as np
+
 
 class ReIDModel:
     def __init__(self):
-        # Load pretrained ResNet50
         self.model = models.resnet50(pretrained=True)
-        self.model = torch.nn.Sequential(*list(self.model.children())[:-1])  # remove last layer
+        self.model = torch.nn.Sequential(*list(self.model.children())[:-1])
         self.model.eval()
 
         self.transform = transforms.Compose([
@@ -22,9 +21,25 @@ class ReIDModel:
         ])
 
     def get_embedding(self, image):
-        img = self.transform(image).unsqueeze(0)  # add batch dim
+        if image is None or image.size == 0:
+            return None
 
-        with torch.no_grad():
-            features = self.model(img)
+        try:
+            img = self.transform(image).unsqueeze(0)
 
-        return features.view(-1).numpy()
+            with torch.no_grad():
+                features = self.model(img)
+
+            embedding = features.view(-1).numpy().astype(np.float32)
+
+            # Normalize so cosine similarity works correctly
+            # Without this, body cross-similarities are inflated
+            norm = np.linalg.norm(embedding)
+            if norm == 0:
+                return None
+
+            return embedding / norm
+
+        except Exception as e:
+            print(f"[ReIDModel] Error: {e}")
+            return None
