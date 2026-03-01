@@ -3,25 +3,18 @@ import numpy as np
 
 class FusionEngine:
     def __init__(self):
-        # Weights derived from cross-similarity analysis:
+        # Weights rebalanced after OSNet 567/567 fix.
+        # Previous analysis was done with broken gate weights (522/567),
+        # which made body embeddings unreliable — hence the 0.95 face dominance.
+        # With correct OSNet weights, body is now a strong signal:
         #
-        #   face  cross-sim ≈ 0.15  → highly discriminative, dominant weight
-        #   body  cross-sim ≈ 0.83  → low discriminability, small weight
-        #   gait  cross-sim ≈ 0.94  → average silhouette not discriminative
-        #                              enough for these subjects, near-zero weight
+        #   face:  0.65  — primary signal, high discriminability
+        #   body:  0.35  — strong secondary signal (OSNet MSMT17 fully loaded)
+        #   gait:  0.01  — frontal camera limits gait utility, near-zero weight
         #
-        # Weight = proportional to (1 - cross_sim)²  (squared to penalize
-        # high cross-sim modalities more aggressively)
-        #   face:  (1-0.15)² = 0.72
-        #   body:  (1-0.83)² = 0.03
-        #   gait:  (1-0.94)² = 0.004
-        # Normalized:
-        #   face  ≈ 0.95
-        #   body  ≈ 0.04
-        #   gait  ≈ 0.01
         self.default_weights = {
-            "face": 0.95,
-            "body": 0.04,
+            "face": 0.65,
+            "body": 0.35,
             "gait": 0.01
         }
 
@@ -38,6 +31,10 @@ class FusionEngine:
         labels  = []
 
         if face_score is not None:
+            # Clip to 0 — a negative face score means the face was unrecognisable
+            # (bad angle, motion blur, occlusion). Letting it go negative actively
+            # drags down the final score even when body is strongly matched.
+            face_score = max(0.0, face_score)
             scores.append(face_score)
             weights.append(self.default_weights["face"])
             labels.append(f"face={face_score:.3f}")
@@ -63,8 +60,9 @@ class FusionEngine:
 
         final_score = float(np.sum(scores * weights))
 
-        # Only trust the result if face was available
+        # Only trust the result if face was available.
         # Body + gait alone cannot distinguish these subjects reliably
+        # at close range with a frontal camera.
         trusted = face_score is not None
 
         if verbose:
