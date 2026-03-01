@@ -14,11 +14,12 @@ def register_body(person_id):
 
     print(f"\n[REGISTER] Registering body for: {person_id}")
     print("  - Stand fully in frame (head to toe if possible)")
-    print("  - Press 's' multiple times from slightly different angles")
+    print("  - Press 's' multiple times from slightly different positions/angles")
+    print("  - Vary distance slightly between captures for robustness")
     print("  - Press ESC to quit\n")
 
-    collected_embeddings = []
-    TARGET_SAMPLES = 10
+    collected = []
+    TARGET_SAMPLES = 15   # Fix 1 — increased from 10, stored as stack not average
 
     while True:
         ret, frame = cap.read()
@@ -42,7 +43,8 @@ def register_body(person_id):
             person_found = True
             color = (0, 255, 0)
             cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(display, f"Press 's' ({len(collected_embeddings)}/{TARGET_SAMPLES})",
+            cv2.putText(display,
+                        f"Press 's' [{len(collected)}/{TARGET_SAMPLES}]",
                         (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         if not person_found:
@@ -63,15 +65,20 @@ def register_body(person_id):
                     continue
                 emb = reid.get_embedding(body_crop)
                 if emb is not None:
-                    collected_embeddings.append(emb)
-                    print(f"  Sample {len(collected_embeddings)}/{TARGET_SAMPLES} captured")
+                    # Normalize each sample individually before storing
+                    emb = emb / np.linalg.norm(emb)
+                    collected.append(emb)
+                    print(f"  Sample {len(collected)}/{TARGET_SAMPLES} captured  "
+                          f"crop=({x2-x1}x{y2-y1})")
                     break
 
-            if len(collected_embeddings) >= TARGET_SAMPLES:
-                final_emb = np.mean(collected_embeddings, axis=0)
-                final_emb = final_emb / np.linalg.norm(final_emb)
-                save_embedding(person_id, final_emb, "body")
-                print(f"\n[REGISTER] ✅ Saved body embedding for {person_id} (averaged {TARGET_SAMPLES} samples)")
+            if len(collected) >= TARGET_SAMPLES:
+                # Fix 1 — save full stack (N, 512) instead of averaged vector
+                # Matcher will score against each exemplar and take max
+                stack = np.stack(collected)   # shape (TARGET_SAMPLES, 512)
+                save_embedding(person_id, stack, "body")
+                print(f"\n[REGISTER] ✅ Saved {TARGET_SAMPLES} body exemplars for {person_id}")
+                print(f"           Shape: {stack.shape} — multi-exemplar matching enabled")
                 break
 
         elif key == ord('s') and not person_found:

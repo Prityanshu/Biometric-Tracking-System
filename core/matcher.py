@@ -4,14 +4,38 @@ from core.fusion_engine import FusionEngine
 
 
 def cosine_similarity(a, b):
+    """
+    Cosine similarity between query vector a and reference b.
+    b can be shape (512,)    — single exemplar
+    b can be shape (N, 512)  — multiple exemplars (Fix 1)
+    In the multi-exemplar case, returns the MAX similarity across all stored samples.
+    """
     if a is None or b is None:
         return None
+
     a = np.array(a, dtype=np.float32).flatten()
-    b = np.array(b, dtype=np.float32).flatten()
-    na, nb = np.linalg.norm(a), np.linalg.norm(b)
-    if na == 0 or nb == 0:
+    na = np.linalg.norm(a)
+    if na == 0:
         return None
-    return float(np.dot(a / na, b / nb))
+    a = a / na
+
+    b = np.array(b, dtype=np.float32)
+
+    # Multi-exemplar: shape (N, 512)
+    if b.ndim == 2:
+        norms = np.linalg.norm(b, axis=1, keepdims=True)
+        valid = (norms.flatten() > 0)
+        if not np.any(valid):
+            return None
+        b_norm = b[valid] / norms[valid]
+        sims = b_norm @ a   # (N,) dot products
+        return float(np.max(sims))
+
+    # Single exemplar: shape (512,)
+    nb = np.linalg.norm(b)
+    if nb == 0:
+        return None
+    return float(np.dot(a, b / nb))
 
 
 class Matcher:
@@ -19,13 +43,28 @@ class Matcher:
         self.db_path = db_path
         self.database = {}
         self.fusion = FusionEngine()
+
+        # Fix 2 — dynamic threshold scales with gallery size
+        # Fix 3 — margin increased from 0.05 to 0.15
+        # MUST be defined before load_database() is called
+        self.BASE_THRESHOLD         = 0.45
+        self.THRESHOLD_WITHOUT_FACE = 0.99   # effectively disabled — body alone unreliable
+        self.MARGIN                 = 0.15   # minimum gap between best and 2nd place
+
         self.load_database()
 
-        # When face IS available: threshold well above face cross-sim (0.15)
-        # When face is NOT available: body/gait cross-sim > 0.83, refuse to guess
-        self.THRESHOLD_WITH_FACE    = 0.45
-        self.THRESHOLD_WITHOUT_FACE = 0.99   # effectively disabled
-        self.MARGIN = 0.05
+    def _dynamic_threshold(self):
+        """
+        Fix 2 — threshold scales with gallery size.
+        More registered people = stricter threshold needed to avoid false positives.
+        3 people  → 0.45 (base)
+        5 people  → 0.49
+        8 people  → 0.55
+        10 people → 0.59
+        """
+        gallery_size = len(self.database)
+        extra = max(0, gallery_size - 3) * 0.02
+        return self.BASE_THRESHOLD + extra
 
     def load_database(self):
         self.database = {}
@@ -40,7 +79,7 @@ class Matcher:
         for file in files:
             if not file.endswith(".npy"):
                 continue
-            parts    = file.replace(".npy", "").split("_")
+            parts = file.replace(".npy", "").split("_")
             if len(parts) < 2:
                 continue
             name     = parts[0]
@@ -52,17 +91,21 @@ class Matcher:
                 if name not in self.database:
                     self.database[name] = {}
                 self.database[name][modality] = emb
+                # (512,) = single exemplar, (N, 512) = multi-exemplar
                 print(f"[DB LOAD] ✅  {name} → {modality}  shape={emb.shape}")
             except Exception as e:
                 print(f"[DB LOAD] ❌  {file}: {e}")
 
-        print(f"\n[DB LOAD] Loaded: {list(self.database.keys())}\n")
+        print(f"\n[DB LOAD] Loaded: {list(self.database.keys())}")
+        print(f"[DB LOAD] Dynamic threshold for {len(self.database)} people: "
+              f"{self._dynamic_threshold():.2f}\n")
 
     def identify(self, face_emb=None, body_emb=None, gait_emb=None):
         if not self.database:
             return "Unknown", 0.0
 
         scores = []
+        threshold = self._dynamic_threshold()   # Fix 2
 
         for person, data in self.database.items():
             face_sim = cosine_similarity(face_emb, data.get("face"))
@@ -88,17 +131,24 @@ class Matcher:
 
         best_person, best_score, best_trusted = scores[0]
         second_score = scores[1][1] if len(scores) > 1 else 0.0
+        margin = best_score - second_score
 
-        threshold = self.THRESHOLD_WITH_FACE if best_trusted else self.THRESHOLD_WITHOUT_FACE
+        active_threshold = threshold if best_trusted else self.THRESHOLD_WITHOUT_FACE
 
         print(f"[MATCHER] Best={best_person} ({best_score:.3f}) | 2nd={second_score:.3f} | "
-              f"threshold={threshold} | trusted={best_trusted}")
+              f"margin={margin:.3f} | threshold={active_threshold:.2f} | trusted={best_trusted}")
 
-        if best_score >= threshold and (best_score - second_score) >= self.MARGIN:
-            print(f"[MATCHER] ✅  → {best_person}")
-            return best_person, best_score
-        else:
-            reason = "no face — refusing to guess" if not best_trusted else \
-                     "score too low" if best_score < threshold else "margin too small"
-            print(f"[MATCHER] ❌  → Unknown ({reason})")
+        if not best_trusted:
+            print(f"[MATCHER] ❌  → Unknown (no face — refusing to guess)")
             return "Unknown", best_score
+
+        if best_score < active_threshold:
+            print(f"[MATCHER] ❌  → Unknown (score too low: {best_score:.3f} < {active_threshold:.2f})")
+            return "Unknown", best_score
+
+        if margin < self.MARGIN:
+            print(f"[MATCHER] ❌  → Unknown (margin too small: {margin:.3f} < {self.MARGIN})")
+            return "Unknown", best_score
+
+        print(f"[MATCHER] ✅  → {best_person}")
+        return best_person, best_score
